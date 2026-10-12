@@ -19,11 +19,11 @@ Native Ubuntu application manager built with Python and GTK 3.
 
 ## 下载与安装
 
-从 [GitHub Releases](https://github.com/wanghao9103/xingxu-app-manager/releases/latest) 下载 `miemie-app-manager_1.1.2_all.deb` 和 `SHA256SUMS`，在下载目录执行：
+从 [GitHub Releases](https://github.com/wanghao9103/xingxu-app-manager/releases/latest) 下载 `miemie-app-manager_1.1.3_all.deb` 和 `SHA256SUMS`，在下载目录执行：
 
 ```bash
 sha256sum -c SHA256SUMS
-sudo apt install ./miemie-app-manager_1.1.2_all.deb
+sudo apt install ./miemie-app-manager_1.1.3_all.deb
 ```
 
 在应用菜单搜索「星序应用管理」，或运行 `miemie-app-manager`。
@@ -53,7 +53,7 @@ sudo apt install python3-gi gir1.2-gtk-3.0 librsvg2-common pkexec
 - APT 安装日期来自留存的 dpkg 日志，兼容 gzip 轮转记录；升级不覆盖最初安装日期。记录不足时显示「未知」，不会用文件修改日期代替。
 - Snap 大小为当前 `.snap` 镜像大小。Flatpak 区分用户级和系统级；未可靠取得的大小与日期显示未知。
 - 独立安装支持用户自有的 `.local/bin`、`.local/opt`、XDG 数据目录和 `~/Applications`。先解析程序和简单包装脚本，再列出专用目录、桌面入口、独占图标、自启动和匹配的用户服务；确认后关闭目标程序并删除清单内文件。保留外部配置和共享图标。无法确认归属的系统目录、跨用户路径和目录符号链接不递归删除。
-- APT 会展示删除及替代安装计划，执行前再次核对。核心包管理、权限和运行依赖受到保护；涉及桌面、登录或网络组件时，需输入应用名称确认。
+- APT 会展示删除及替代安装计划，执行前再次核对。核心包管理、权限和运行依赖受到保护；涉及桌面、登录或网络组件时，需输入应用名称确认。系统安装的星序自身也支持卸载，完成后自动退出。
 - APT 不使用 purge/autoremove，Snap 不使用 `--purge`，Flatpak 不使用 `--delete-data`。应用维护脚本仍可能改变数据；专用安装目录内的个人文件应提前备份。
 - 操作锁冲突、授权取消或命令超时会报告失败。其他包管理进程可能改变系统状态；重试前应先确认软件管理状态。
 - 卸载记录保存在 `$XDG_STATE_HOME/miemie-app-manager/history.json`，默认 `~/.local/state/miemie-app-manager/history.json`，最多保留 200 条。

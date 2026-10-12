@@ -9,6 +9,7 @@ import gi
 gi.require_version("Gtk", "3.0")
 from gi.repository import Gtk, Gio, GLib, Gdk, GdkPixbuf
 from .backend import Manager, ManagerError, format_size
+from . import __version__
 
 ROOT = Path(__file__).resolve().parent.parent
 APP_ID = "io.miemie.AppManager"
@@ -120,16 +121,26 @@ def icon(name, size=20):
 
 
 def app_icon(app, size=40):
+    if app.id == APP_ID + ".desktop" or app.package.split(":", 1)[0] == "miemie-app-manager":
+        return Gtk.Image.new_from_pixbuf(GdkPixbuf.Pixbuf.new_from_file_at_scale(str(ROOT / "assets/icon.png"), size, size, True))
     if app.icon.startswith("/") and Path(app.icon).is_file():
         try:
             return Gtk.Image.new_from_pixbuf(GdkPixbuf.Pixbuf.new_from_file_at_scale(app.icon, size, size, True))
         except GLib.Error:
             pass
     theme = Gtk.IconTheme.get_default()
-    name = app.icon
-    if not theme.has_icon(name):
-        name = "application-x-executable"
-    return icon(name, size)
+    info = theme.lookup_icon(app.icon, size, Gtk.IconLookupFlags.FORCE_SIZE)
+    if info:
+        try:
+            return Gtk.Image.new_from_pixbuf(info.load_icon())
+        except GLib.Error:
+            pass  # A stale theme cache may refer to a removed user icon.
+    return icon("application-x-executable", size)
+
+
+def removes_running_manager(plan):
+    return bool((plan.manual and ROOT in plan.manual.targets) or
+                (plan.app.source == "APT" and plan.app.package.split(":", 1)[0] == "miemie-app-manager"))
 
 
 class Window(Gtk.ApplicationWindow):
@@ -183,7 +194,7 @@ class Window(Gtk.ApplicationWindow):
             self.add_nav(sidebar, mode, title, image)
         sidebar.pack_start(box(), True, True, 0)
         self.add_nav(sidebar, "history", "卸载记录", "document-text-symbolic")
-        about = Gtk.Button(label="关于 · 版本 1.1.2")
+        about = Gtk.Button(label=f"关于 · 版本 {__version__}")
         style(about, "nav")
         about.connect("clicked", self.about)
         sidebar.pack_start(margins(about, 15), False, False, 0)
@@ -551,7 +562,7 @@ class Window(Gtk.ApplicationWindow):
         body.pack_start(title, False, False, 0)
         body.pack_start(label(f"来源：{plan.app.source}   ·   版本：{plan.app.version}", "muted"), False, False, 0)
         unit = "文件或目录" if plan.manual else "软件包"
-        closing = "请先保存内容，卸载时会关闭该应用。" if plan.manual else "请先保存内容并关闭目标应用。"
+        closing = "卸载完成后，星序会自动退出。" if removes_running_manager(plan) else "请先保存内容，卸载时会关闭该应用。" if plan.manual else "请先保存内容并关闭目标应用。"
         message = label(f"本次将移除以下 {len(plan.removed)} 个{unit}。{closing}")
         message.set_line_wrap(True)
         body.pack_start(message, False, False, 0)
@@ -602,7 +613,7 @@ class Window(Gtk.ApplicationWindow):
         def done(_):
             self.record(plan.app, "已卸载")
             self.busy = False
-            if plan.manual and ROOT in plan.manual.targets:
+            if removes_running_manager(plan):
                 self.get_application().quit()
                 return
             self.refresh_button.set_sensitive(True)
@@ -660,7 +671,7 @@ class Window(Gtk.ApplicationWindow):
         dialog.destroy()
 
     def about(self, _):
-        dialog = Gtk.AboutDialog(transient_for=self, modal=True, program_name="星序 · 应用管理", version="1.1.2", comments="Ubuntu 原生应用管理工具\n应用图标 · 名称搜索 · 安装信息 · 卸载计划\n支持 APT、Snap 和 Flatpak；支持用户目录独立安装。", license_type=Gtk.License.MIT_X11)
+        dialog = Gtk.AboutDialog(transient_for=self, modal=True, program_name="星序 · 应用管理", version=__version__, comments="Ubuntu 原生应用管理工具\n应用图标 · 名称搜索 · 安装信息 · 卸载计划\n支持 APT、Snap 和 Flatpak；支持用户目录独立安装。", license_type=Gtk.License.MIT_X11)
         dialog.set_logo(GdkPixbuf.Pixbuf.new_from_file_at_scale(str(ROOT / "assets/icon.svg"), 80, 80, True))
         dialog.run()
         dialog.destroy()

@@ -1,6 +1,8 @@
 {
   "synthetic_data_only": true,
   "uninstall_executed": false,
+  "self_icon_survives_missing_theme_file": true,
+  "simulated_self_uninstall_confirmation_and_exit": true,
   "passed": true,
   "header_text_fits": true,
   "column_sort_buttons_toggle_and_sync": true,

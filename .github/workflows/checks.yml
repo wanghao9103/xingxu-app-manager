@@ -34,6 +34,10 @@ jobs:
           diff -r --exclude=__pycache__ app_manager .local/package/usr/share/miemie-app-manager/app_manager
           diff -r assets .local/package/usr/share/miemie-app-manager/assets
           cmp LICENSE .local/package/usr/share/doc/miemie-app-manager/copyright
+      - name: Verify actual installation and self removal in disposable runner
+        run: |
+          sudo apt-get install -y ./deliverables/*.deb
+          sudo env GITHUB_ACTIONS=true xvfb-run -a /usr/bin/python3 scripts/ci-installed-check.py
       - name: Save package and synthetic screenshots
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
@@ -41,4 +45,5 @@ jobs:
           path: |
             deliverables/*.deb
             .local/ci-preview/*
+            .local/ci-installed-report.json
           include-hidden-files: true

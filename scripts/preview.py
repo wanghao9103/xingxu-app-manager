@@ -4,10 +4,12 @@ import json
 from pathlib import Path
 import sys
 import time
+import tempfile
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
-from app_manager.backend import Application, ManagerError
-from app_manager.ui import App, Window, Gtk, GLib, Gdk
+from app_manager.backend import Application, Manager, ManagerError, parse_packages
+from app_manager import __version__
+from app_manager.ui import App, Window, Gtk, GLib, Gdk, GdkPixbuf, ROOT, app_icon
 
 
 class PreviewManager:
@@ -22,7 +24,7 @@ class PreviewManager:
             ("Notes", "example-notes", "手动安装", "1.10", 18, "", "accessories-text-editor"),
             ("Text Editor", "gnome-text-editor", "APT", "46.2", 12, "2026-10-08 12:00:00", "text-x-generic"),
             ("Web Browser", "example-browser", "Snap", "130.0", 220, "", "web-browser"),
-            ("星序", "miemie-app-manager", "手动安装", "1.1.2", 1, "", "applications-other"),
+            ("星序", "miemie-app-manager", "手动安装", __version__, 1, "", "applications-other"),
         ]
         return [Application(f"example-{i}.desktop", name, package, source, version,
                             size * mb, date, icon=icon)
@@ -87,9 +89,15 @@ def main():
             dates = [a.installed_at for a in win.filtered() if a.installed_at]
             assert dates == sorted(dates, reverse=True)
             assert not win.filtered()[-1].installed_at
+            settle(200)
             win.sort.popup_for_device(Gdk.Display.get_default().get_default_seat().get_pointer())
             settle(400)
-            assert win.sort.get_property("popup-shown")
+            if not win.sort.get_property("popup-shown"):
+                win.present()
+                settle(300)
+                win.sort.popup_for_device(Gdk.Display.get_default().get_default_seat().get_pointer())
+                settle(400)
+            assert win.sort.get_property("popup-shown"), 'sort menu did not open'
             popup = win.sort.get_popup_accessible().get_widget()
             screenshot(popup.get_toplevel(), output / "sort-menu.png")
             win.sort.popdown()
@@ -97,10 +105,53 @@ def main():
             win.set_focus(None)
             settle(400)
             screenshot(win, output / "main.png")
+            # A deleted user theme icon must not replace our bundled star with a missing icon.
+            target = Application('io.miemie.AppManager.desktop', '星序应用管理', 'miemie-app-manager', 'APT',
+                                 __version__, icon='/nonexistent/old-user-icon.png')
+            actual = app_icon(target).get_pixbuf()
+            expected = GdkPixbuf.Pixbuf.new_from_file_at_scale(str(ROOT / 'assets/icon.png'), 40, 40, True)
+            assert actual.get_pixels() == expected.get_pixels()
+            report['self_icon_survives_missing_theme_file'] = True
+            # Drive the real confirmation/worker/exit flow; package commands are simulated.
+            calls = []
+            def runner(args, **kwargs):
+                calls.append(args)
+                if args[0] == '/usr/bin/apt-get':
+                    return f'Remv miemie-app-manager [{__version__}]\n'
+                if args[0] == '/usr/bin/dpkg-query':
+                    return 'config-files'
+                return 'Simulated self removal'
+            manager = Manager(runner)
+            manager.packages = parse_packages(f'miemie-app-manager\tinstalled\t{__version__}\t100\tno\toptional\n')
+            manager.apps[target.id] = target
+            win.manager = manager
+            win.apps = [target]
+            quit_calls = []
+            original_quit = app.quit
+            app.quit = lambda: quit_calls.append(True)
+            with tempfile.TemporaryDirectory() as state:
+                win.history_path = Path(state) / 'history.json'
+                def accept_self_dialog():
+                    for dialog in Gtk.Window.list_toplevels():
+                        if isinstance(dialog, Gtk.Dialog) and dialog.get_transient_for() == win:
+                            assert dialog.get_widget_for_response(Gtk.ResponseType.OK).get_sensitive()
+                            dialog.response(Gtk.ResponseType.OK)
+                            return False
+                    return True
+                GLib.timeout_add(100, accept_self_dialog)
+                win.confirm_uninstall(manager.plan(target.id))
+                deadline = time.monotonic() + 5
+                while not quit_calls and time.monotonic() < deadline:
+                    settle(100)
+                assert quit_calls and not win.busy
+                assert json.loads(win.history_path.read_text())[0]['status'] == '已卸载'
+                assert next(args for args in calls if args[0] == '/usr/bin/pkexec')[-2:] == ['--', 'miemie-app-manager']
+            app.quit = original_quit
+            report['simulated_self_uninstall_confirmation_and_exit'] = True
             report.update(passed=True, header_text_fits=True, column_sort_buttons_toggle_and_sync=True,
                           sort_popup_visible=True, unknown_dates_last=True)
         except Exception as exc:
-            report.update(passed=False, error=str(exc))
+            report.update(passed=False, error=repr(exc))
         (output / "preview.json").write_text(json.dumps(report, ensure_ascii=False, indent=2))
         print(json.dumps(report, ensure_ascii=False))
         app.quit()

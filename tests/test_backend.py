@@ -23,6 +23,34 @@ class BackendTests(unittest.TestCase):
         self.assertEqual(owners["/usr/share/applications/editor.desktop"], "editor:amd64")
         self.assertEqual(owners["/path with spaces/file.desktop"], "other")
 
+    def test_manager_package_can_remove_itself_and_check_final_status(self):
+        calls = []
+        def runner(args, **kwargs):
+            calls.append(args)
+            if args[0] == '/usr/bin/apt-get':
+                return 'Remv miemie-app-manager [1.1.3]\n'
+            if args[0] == '/usr/bin/dpkg-query':
+                return 'config-files'
+            return 'Removed manager'
+        manager = Manager(runner)
+        manager.packages = parse_packages('miemie-app-manager\tinstalled\t1.1.3\t100\tno\toptional\n')
+        self.assertFalse(manager.packages['miemie-app-manager']['protected'])
+        app = Application('io.miemie.AppManager.desktop', '星序应用管理', 'miemie-app-manager', 'APT')
+        app.protected = manager.packages[app.package]['protected']
+        manager.apps[app.id] = app
+        self.assertTrue(app.removable)
+        plan = manager.plan(app.id)
+        self.assertEqual(plan.removed, ['miemie-app-manager'])
+        self.assertEqual(manager.uninstall(plan), 'Removed manager')
+        self.assertEqual(next(args for args in calls if args[0] == '/usr/bin/pkexec')[-2:], ['--', 'miemie-app-manager'])
+
+    def test_self_removal_still_blocks_core_dependency(self):
+        manager = Manager(lambda *args, **kwargs: 'Remv miemie-app-manager [1.1.3]\nRemv apt [3.2]\n')
+        app = Application('io.miemie.AppManager.desktop', '星序应用管理', 'miemie-app-manager', 'APT')
+        manager.apps[app.id] = app
+        with self.assertRaisesRegex(ManagerError, '系统保护组件 apt'):
+            manager.plan(app.id)
+
     def test_install_date_is_not_upgrade_date(self):
         dates = parse_install_log(["2026-10-02 12:00:00 upgrade editor:amd64 1.0 2.0", "2026-10-01 10:00:00 install editor:amd64 <none> 1.0"])
         self.assertEqual(dates["editor"], "2026-10-01 10:00:00")

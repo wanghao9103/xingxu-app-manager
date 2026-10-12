@@ -226,6 +226,9 @@ def uninstall_manual(plan, runner):
     runner(["/usr/bin/systemctl", "--user", "daemon-reload"], timeout=15, accept=(0, 1))
     if shutil.which("update-desktop-database"):
         runner([shutil.which("update-desktop-database"), str(Path(os.environ.get("XDG_DATA_HOME", Path.home() / ".local/share")) / "applications")], accept=(0, 1))
+    icons = Path(os.environ.get("XDG_DATA_HOME", Path.home() / ".local/share")) / "icons/hicolor"
+    if shutil.which("gtk-update-icon-cache") and icons.is_dir():
+        runner([shutil.which("gtk-update-icon-cache"), "-f", "-t", str(icons)], accept=(0, 1))
     if any(p.exists() or p.is_symlink() for p in plan.targets):
         raise ManualError("部分应用文件仍然存在，请检查文件权限后重试。")
     return "独立应用、相关启动入口及匹配的用户服务已移除。"

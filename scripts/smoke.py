@@ -82,6 +82,9 @@ def finish():
             assert icon_name == ("pan-up-symbolic" if win.sort.get_active() == ascending else "pan-down-symbolic")
         report["column_sort_buttons_toggle_and_sync"] = True
         win.sort.set_active(2)
+        loop = GLib.MainLoop()
+        GLib.timeout_add(200, lambda: (loop.quit(), False)[1])
+        loop.run()
         win.sort.popup_for_device(Gdk.Display.get_default().get_default_seat().get_pointer())
         loop = GLib.MainLoop()
         GLib.timeout_add(400, lambda: (loop.quit(), False)[1])
@@ -91,6 +94,26 @@ def finish():
         screenshot(popup.get_toplevel(), "sort-menu.png")
         report["sort_popup_visible"] = True
         win.sort.popdown()
+        self_app = next((a for a in win.apps if a.package == 'miemie-app-manager'), None)
+        if self_app:
+            assert self_app.removable
+            self_plan = win.manager.plan(self_app.id)
+            assert self_plan.removed == ['miemie-app-manager']
+            win.sort.set_active(2)
+            loop = GLib.MainLoop()
+            GLib.timeout_add(250, lambda: (loop.quit(), False)[1])
+            loop.run()
+            screenshot(win, 'self-installed.png')
+            self_dialog = win.make_confirm_dialog(self_plan)
+            assert self_dialog.get_widget_for_response(Gtk.ResponseType.OK).get_sensitive()
+            def cancel_self():
+                screenshot(self_dialog, 'self-confirm.png')
+                self_dialog.response(Gtk.ResponseType.CANCEL)
+            GLib.timeout_add(400, cancel_self)
+            assert self_dialog.run() == Gtk.ResponseType.CANCEL
+            self_dialog.destroy()
+            report['installed_self_uninstall_enabled_and_cancelled'] = True
+            report['installed_self_version'] = self_app.version
         from app_manager.backend import Plan
         risk_plan = Plan(win.apps[0], ['gdm3'], ('fixture',), risky=['gdm3'])
         risk_dialog = win.make_confirm_dialog(risk_plan)

@@ -70,7 +70,6 @@ PROTECTED = {
     "gir1.2-gtk-3.0", "libgtk-3-0t64",
     "gnome-shell", "gnome-session", "gnome-session-bin", "gdm3", "network-manager",
     "systemd", "systemd-sysv", "sudo", "polkitd", "pkexec", "snapd",
-    "miemie-app-manager",
 }
 HARD_PROTECTED = PROTECTED - {"gnome-shell", "gnome-session", "gnome-session-bin", "gdm3", "network-manager", "snapd"}
 
