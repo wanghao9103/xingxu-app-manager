@@ -1,0 +1,44 @@
+name: Ubuntu checks
+
+on:
+  push:
+    branches: [main]
+    tags: ['v*']
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  tests-and-package:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - name: Install native GTK dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y python3-gi gir1.2-gtk-3.0 librsvg2-common adwaita-icon-theme fonts-noto-cjk desktop-file-utils xvfb xauth
+      - name: Run backend tests
+        run: /usr/bin/python3 -m unittest discover -s tests -v
+      - name: Verify native UI with synthetic data
+        env:
+          GDK_BACKEND: x11
+        run: xvfb-run -a /usr/bin/python3 scripts/preview.py .local/ci-preview
+      - name: Build and inspect Debian package
+        run: |
+          /usr/bin/python3 scripts/build-deb.py
+          desktop-file-validate assets/io.miemie.AppManager.desktop
+          dpkg-deb --info deliverables/*.deb
+          dpkg-deb --extract deliverables/*.deb .local/package
+          diff -r --exclude=__pycache__ app_manager .local/package/usr/share/miemie-app-manager/app_manager
+          diff -r assets .local/package/usr/share/miemie-app-manager/assets
+          cmp LICENSE .local/package/usr/share/doc/miemie-app-manager/copyright
+      - name: Save package and synthetic screenshots
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: xingxu-ubuntu-checks
+          path: |
+            deliverables/*.deb
+            .local/ci-preview/*
+          include-hidden-files: true

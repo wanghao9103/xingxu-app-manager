@@ -1,0 +1,15 @@
+__pycache__/
+*.pyc
+.local/
+deliverables/staging/
+deliverables/
+.codex/
+.env
+.env.*
+docs/*.json
+docs/backend-tests.txt
+docs/deb-install-simulation.txt
+docs/main.png
+docs/confirm.png
+docs/manual-confirm.png
+docs/sort-menu.png
