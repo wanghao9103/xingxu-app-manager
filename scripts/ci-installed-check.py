@@ -3,12 +3,13 @@
 from pathlib import Path
 import json
 import os
+import platform
 import sys
 
 if os.environ.get('GITHUB_ACTIONS') != 'true' or os.geteuid() != 0:
     raise SystemExit('This destructive regression is restricted to the disposable GitHub Actions runner.')
 
-sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+sys.path.insert(0, '/usr/share/miemie-app-manager')
 from app_manager import __version__
 from app_manager.backend import Manager, run
 from app_manager.ui import app_icon
@@ -20,6 +21,8 @@ def root_runner(args, **kwargs):
 
 
 manager = Manager(root_runner)
+architecture = root_runner(['/usr/bin/dpkg', '--print-architecture']).strip()
+assert architecture == os.environ['XINGXU_EXPECTED_ARCH']
 app = next(a for a in manager.scan() if a.package == 'miemie-app-manager')
 assert app.version == __version__ and app.source == 'APT' and app.removable
 assert app.name == '星序应用管理'
@@ -33,7 +36,8 @@ for filename in ('/usr/bin/miemie-app-manager', '/usr/share/applications/io.miem
     assert not Path(filename).exists(), filename
 assert root_runner(['/usr/bin/dpkg-query', '-W', '-f=${db:Status-Status}', 'apt']).strip() == 'installed'
 assert root_runner(['/usr/bin/dpkg-query', '-W', '-f=${db:Status-Status}', 'python3-gi']).strip() == 'installed'
-report = {'version': __version__, 'system_icon_decodes': True, 'self_plan_only_removes_manager': True,
+report = {'version': __version__, 'dpkg_architecture': architecture, 'machine': platform.machine(),
+          'running_installed_package_code': True, 'system_icon_decodes': True, 'self_plan_only_removes_manager': True,
           'real_ci_package_removed': True, 'core_dependencies_retained': True,
           'production_user_software_removed': False}
 output = Path('.local/ci-installed-report.json')

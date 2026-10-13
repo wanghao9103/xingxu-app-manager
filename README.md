@@ -19,16 +19,27 @@ Native Ubuntu application manager built with Python and GTK 3.
 
 ## 下载与安装
 
-从 [GitHub Releases](https://github.com/wanghao9103/xingxu-app-manager/releases/latest) 下载 `miemie-app-manager_1.1.3_all.deb` 和 `SHA256SUMS`，在下载目录执行：
+从 [GitHub Releases](https://github.com/wanghao9103/xingxu-app-manager/releases/latest) 下载 `miemie-app-manager_1.1.4_all.deb` 和 `SHA256SUMS`，在下载目录执行：
 
 ```bash
 sha256sum -c SHA256SUMS
-sudo apt install ./miemie-app-manager_1.1.3_all.deb
+sudo apt install ./miemie-app-manager_1.1.4_all.deb
 ```
 
 在应用菜单搜索「星序应用管理」，或运行 `miemie-app-manager`。
 
-本版桌面实测环境为 **Ubuntu 26.04.1 amd64**。安装包架构标记为 `all`，使用系统 Python 和 GTK，其他发行版及硬件架构的实际桌面运行尚未覆盖。依赖包含 Python 3.10+、PyGObject、GTK 3、APT/dpkg 和 pkexec；Snap、Flatpak 仅在已安装对应管理器时使用。
+支持 **Ubuntu 24.04 / 26.04 的 AMD64 和 ARM64（aarch64）** 桌面环境。两种架构都下载同一个 `all.deb`：程序不捆绑 x86 二进制，APT 自动安装对应架构的 Python、GTK 和 PyGObject 依赖。
+
+可用以下命令确认系统架构；ARM64 分别显示 `arm64` 和 `aarch64`：
+
+```bash
+dpkg --print-architecture
+uname -m
+```
+
+每次 CI 在四个平台测试同一份安装包，核验真实 CPU/Ubuntu 版本、Python/PyGObject 的 ELF 架构、界面、实际安装和卸载。对应版本结果见 [GitHub Actions](https://github.com/wanghao9103/xingxu-app-manager/actions/workflows/checks.yml)。物理桌面实测为 Ubuntu 26.04.1 AMD64；ARM64 的界面验证使用原生 ARM 运行器上的 Xvfb，尚未覆盖 ARM 物理桌面、Wayland 和管理员认证交互。32 位 ARM（armhf）不在本版验证范围。
+
+依赖包含 Python 3.10+、PyGObject、GTK 3、APT/dpkg 和 pkexec；Snap、Flatpak 仅在已安装对应管理器时使用。
 
 ## 从源码运行
 

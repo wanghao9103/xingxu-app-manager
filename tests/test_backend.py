@@ -19,9 +19,11 @@ class BackendTests(unittest.TestCase):
         self.assertTrue(packages["libgtk-3-0t64"]["protected"])
 
     def test_multiarch_file_owner(self):
-        owners = parse_owners("editor:amd64: /usr/share/applications/editor.desktop\nother: /path with spaces/file.desktop\n")
-        self.assertEqual(owners["/usr/share/applications/editor.desktop"], "editor:amd64")
-        self.assertEqual(owners["/path with spaces/file.desktop"], "other")
+        for architecture in ('amd64', 'arm64'):
+            with self.subTest(architecture=architecture):
+                owners = parse_owners(f"editor:{architecture}: /usr/share/applications/editor.desktop\nother: /path with spaces/file.desktop\n")
+                self.assertEqual(owners["/usr/share/applications/editor.desktop"], f"editor:{architecture}")
+                self.assertEqual(owners["/path with spaces/file.desktop"], "other")
 
     def test_manager_package_can_remove_itself_and_check_final_status(self):
         calls = []
@@ -52,12 +54,16 @@ class BackendTests(unittest.TestCase):
             manager.plan(app.id)
 
     def test_install_date_is_not_upgrade_date(self):
-        dates = parse_install_log(["2026-10-02 12:00:00 upgrade editor:amd64 1.0 2.0", "2026-10-01 10:00:00 install editor:amd64 <none> 1.0"])
-        self.assertEqual(dates["editor"], "2026-10-01 10:00:00")
+        for architecture in ('amd64', 'arm64'):
+            with self.subTest(architecture=architecture):
+                dates = parse_install_log([f"2026-10-02 12:00:00 upgrade editor:{architecture} 1.0 2.0", f"2026-10-01 10:00:00 install editor:{architecture} <none> 1.0"])
+                self.assertEqual(dates["editor"], "2026-10-01 10:00:00")
 
     def test_removed_then_reinstalled_date(self):
-        dates = parse_install_log(["2026-10-01 10:00:00 install editor:amd64 <none> 1.0", "2026-10-02 10:00:00 remove editor:amd64 1.0 <none>", "2026-10-03 10:00:00 install editor:amd64 <none> 2.0"])
-        self.assertEqual(dates["editor"], "2026-10-03 10:00:00")
+        for architecture in ('amd64', 'arm64'):
+            with self.subTest(architecture=architecture):
+                dates = parse_install_log([f"2026-10-01 10:00:00 install editor:{architecture} <none> 1.0", f"2026-10-02 10:00:00 remove editor:{architecture} 1.0 <none>", f"2026-10-03 10:00:00 install editor:{architecture} <none> 2.0"])
+                self.assertEqual(dates["editor"], "2026-10-03 10:00:00")
 
     def test_desktop_dependency_requires_explicit_risk_confirmation(self):
         manager = self.manager(lambda *a, **kw: "Remv editor [1.2]\nRemv gnome-shell [1.0]\n")

@@ -10,22 +10,17 @@ permissions:
   contents: read
 
 jobs:
-  tests-and-package:
+  build-package:
+    name: Build universal Debian package
     runs-on: ubuntu-24.04
     timeout-minutes: 15
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
-      - name: Install native GTK dependencies
+      - name: Install package build dependencies
         run: |
           sudo apt-get update
-          sudo apt-get install -y python3-gi gir1.2-gtk-3.0 librsvg2-common adwaita-icon-theme fonts-noto-cjk desktop-file-utils xvfb xauth
-      - name: Run backend tests
-        run: /usr/bin/python3 -m unittest discover -s tests -v
-      - name: Verify native UI with synthetic data
-        env:
-          GDK_BACKEND: x11
-        run: xvfb-run -a /usr/bin/python3 scripts/preview.py .local/ci-preview
-      - name: Build and inspect Debian package
+          sudo apt-get install -y python3-gi gir1.2-gtk-3.0 librsvg2-common desktop-file-utils
+      - name: Build and inspect the shared Debian package
         run: |
           /usr/bin/python3 scripts/build-deb.py
           desktop-file-validate assets/io.miemie.AppManager.desktop
@@ -34,16 +29,69 @@ jobs:
           diff -r --exclude=__pycache__ app_manager .local/package/usr/share/miemie-app-manager/app_manager
           diff -r assets .local/package/usr/share/miemie-app-manager/assets
           cmp LICENSE .local/package/usr/share/doc/miemie-app-manager/copyright
+          cd deliverables
+          sha256sum *.deb > SHA256SUMS
+      - name: Save the exact package tested on every platform
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: xingxu-universal-deb
+          path: |
+            deliverables/*.deb
+            deliverables/SHA256SUMS
+
+  tests-and-install:
+    name: Ubuntu ${{ matrix.ubuntu }} / ${{ matrix.arch }}
+    needs: build-package
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: ubuntu-24.04
+            ubuntu: '24.04'
+            arch: amd64
+          - runner: ubuntu-24.04-arm
+            ubuntu: '24.04'
+            arch: arm64
+          - runner: ubuntu-26.04
+            ubuntu: '26.04'
+            arch: amd64
+          - runner: ubuntu-26.04-arm
+            ubuntu: '26.04'
+            arch: arm64
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - name: Install native GTK dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y python3-gi gir1.2-gtk-3.0 librsvg2-common adwaita-icon-theme fonts-noto-cjk desktop-file-utils xvfb xauth
+      - name: Download the shared package
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: xingxu-universal-deb
+          path: deliverables
+      - name: Verify package checksum
+        working-directory: deliverables
+        run: sha256sum -c SHA256SUMS
+      - name: Verify native architecture and Ubuntu version
+        run: /usr/bin/python3 scripts/check-platform.py --arch ${{ matrix.arch }} --ubuntu ${{ matrix.ubuntu }} --package deliverables/*.deb
+      - name: Run backend tests
+        run: /usr/bin/python3 -m unittest discover -s tests -v
+      - name: Verify native UI with synthetic data
+        env:
+          GDK_BACKEND: x11
+        run: xvfb-run -a /usr/bin/python3 scripts/preview.py .local/ci-preview
       - name: Verify actual installation and self removal in disposable runner
         run: |
           sudo apt-get install -y ./deliverables/*.deb
-          sudo env GITHUB_ACTIONS=true xvfb-run -a /usr/bin/python3 scripts/ci-installed-check.py
-      - name: Save package and synthetic screenshots
+          sudo env GITHUB_ACTIONS=true XINGXU_EXPECTED_ARCH=${{ matrix.arch }} xvfb-run -a /usr/bin/python3 scripts/ci-installed-check.py
+      - name: Save platform and native UI evidence
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
-          name: xingxu-ubuntu-checks
+          name: xingxu-checks-${{ matrix.ubuntu }}-${{ matrix.arch }}
           path: |
-            deliverables/*.deb
             .local/ci-preview/*
+            .local/platform-report.json
             .local/ci-installed-report.json
           include-hidden-files: true
