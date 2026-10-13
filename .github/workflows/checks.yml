@@ -25,6 +25,7 @@ jobs:
           /usr/bin/python3 scripts/build-deb.py
           desktop-file-validate assets/io.miemie.AppManager.desktop
           dpkg-deb --info deliverables/*.deb
+          mkdir -p .local/package
           dpkg-deb --extract deliverables/*.deb .local/package
           diff -r --exclude=__pycache__ app_manager .local/package/usr/share/miemie-app-manager/app_manager
           diff -r assets .local/package/usr/share/miemie-app-manager/assets
