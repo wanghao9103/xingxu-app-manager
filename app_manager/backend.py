@@ -16,20 +16,28 @@ class ManagerError(Exception):
     pass
 
 
-def run(args, timeout=30, accept=(0,)):
+def run(args, timeout=30, accept=(0,), progress=None):
+    from .privileges import command_for
+    command = command_for(args, progress=progress is not None)
+    env = {**os.environ, "LC_ALL": "C", "LANG": "C"}
     try:
-        p = subprocess.run(args, capture_output=True, text=True, timeout=timeout,
-                           env={**os.environ, "LC_ALL": "C", "LANG": "C"})
+        if progress is not None:
+            from .progress import stream
+            returncode, stdout = stream(command, env, progress, timeout)
+            stderr = ""
+        else:
+            p = subprocess.run(command, capture_output=True, text=True, timeout=timeout, env=env)
+            returncode, stdout, stderr = p.returncode, p.stdout, p.stderr
     except FileNotFoundError as e:
         raise ManagerError(f"系统未安装 {args[0]}") from e
     except subprocess.TimeoutExpired as e:
         raise ManagerError("操作超时，请检查系统软件管理服务后重试。") from e
-    if p.returncode not in accept:
-        detail = (p.stderr.strip() or p.stdout.strip())[-6000:]
-        if p.returncode in (126, 127) and args[0] == "/usr/bin/pkexec":
+    if returncode not in accept:
+        detail = (stderr.strip() or stdout.strip())[-6000:]
+        if returncode in (126, 127) and args[0] == "/usr/bin/pkexec":
             detail = "系统授权已取消或未能取得权限。"
-        raise ManagerError(detail or f"操作失败（退出码 {p.returncode}）")
-    return p.stdout
+        raise ManagerError(detail or f"操作失败（退出码 {returncode}）")
+    return stdout
 
 
 @dataclass
@@ -178,6 +186,7 @@ class Manager:
         self.apps = {}
         self.packages = {}
         self.warnings = []
+        self.updates = {}
         self._lock = threading.Lock()
 
     def scan(self):
@@ -278,7 +287,20 @@ class Manager:
                                     package=package, source="Flatpak", scope=scope,
                                     version=data[2] if len(data) > 2 and data[2] else "未知", icon=package)
         self.apps, self.packages, self.warnings = apps, packages, warnings
+        self.updates = {}
         return sorted(apps.values(), key=lambda a: a.name.casefold())
+
+    def check_updates(self, refresh=True):
+        from .updates import check_updates
+        return check_updates(self, refresh)
+
+    def plan_update(self, app_id):
+        from .updates import plan_update
+        return plan_update(self, app_id)
+
+    def update(self, plan, progress=None):
+        from .updates import execute_update
+        return execute_update(self, plan, progress)
 
     def get(self, app_id):
         app = self.apps.get(app_id)

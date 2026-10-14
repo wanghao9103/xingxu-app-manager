@@ -1,0 +1,31 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE policyconfig PUBLIC "-//freedesktop//DTD polkit Policy Configuration 1.0//EN" "http://www.freedesktop.org/software/polkit/policyconfig-1.dtd">
+<policyconfig>
+  <vendor>星序应用管理</vendor>
+  <action id="io.miemie.AppManager.manage">
+    <description>Manage applications with Xingxu</description>
+    <description xml:lang="zh_CN">使用星序管理应用</description>
+    <message>Authentication is required to manage applications. Authorization is remembered briefly for subsequent operations.</message>
+    <message xml:lang="zh_CN">星序需要授权以管理应用，授权后短时间内连续操作无需重复输入密码。</message>
+    <icon_name>io.miemie.AppManager</icon_name>
+    <defaults>
+      <allow_any>auth_admin</allow_any>
+      <allow_inactive>auth_admin</allow_inactive>
+      <allow_active>auth_admin_keep</allow_active>
+    </defaults>
+    <annotate key="org.freedesktop.policykit.exec.path">/usr/libexec/miemie-app-manager-helper</annotate>
+  </action>
+  <action id="io.miemie.AppManager.authorize">
+    <description>Configure persistent authorization for Xingxu</description>
+    <description xml:lang="zh_CN">设置星序的一次授权</description>
+    <message>Authenticate once to enable or revoke persistent Xingxu authorization for your account.</message>
+    <message xml:lang="zh_CN">验证身份以启用或撤销当前账号的星序长期授权；启用后，后续管理应用无需反复输入密码。</message>
+    <icon_name>io.miemie.AppManager</icon_name>
+    <defaults>
+      <allow_any>no</allow_any>
+      <allow_inactive>no</allow_inactive>
+      <allow_active>auth_admin</allow_active>
+    </defaults>
+    <annotate key="org.freedesktop.policykit.exec.path">/usr/libexec/miemie-app-manager-authorize</annotate>
+  </action>
+</policyconfig>

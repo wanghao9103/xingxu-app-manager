@@ -1,8 +1,12 @@
 #!/usr/bin/python3
 from pathlib import Path
+import os
 import shutil
 import subprocess
 import sys
+
+# Packages must not inherit a developer's group-writable umask/source modes.
+os.umask(0o022)
 
 project = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(project))
@@ -22,6 +26,17 @@ binary_dir.mkdir(parents=True)
 launcher = binary_dir / "miemie-app-manager"
 launcher.write_text('#!/bin/sh\ncd /usr/share/miemie-app-manager || exit 1\nexec /usr/bin/python3 -m app_manager "$@"\n')
 launcher.chmod(0o755)
+helper_dir = stage / "usr/libexec"
+helper_dir.mkdir(parents=True)
+helper = helper_dir / "miemie-app-manager-helper"
+shutil.copyfile(project / "app_manager/privileged_helper.py", helper)
+helper.chmod(0o755)
+authorizer = helper_dir / "miemie-app-manager-authorize"
+shutil.copyfile(project / "app_manager/authorization_helper.py", authorizer)
+authorizer.chmod(0o755)
+policy_dir = stage / "usr/share/polkit-1/actions"
+policy_dir.mkdir(parents=True)
+shutil.copyfile(project / "assets/polkit/io.miemie.AppManager.policy", policy_dir / "io.miemie.AppManager.policy")
 desktop_dir = stage / "usr/share/applications"
 desktop_dir.mkdir(parents=True)
 shutil.copyfile(project / "assets/io.miemie.AppManager.desktop", desktop_dir / "io.miemie.AppManager.desktop")
@@ -53,8 +68,19 @@ exit 0
 '''
 for name in ("postinst", "postrm"):
     script = control_dir / name
-    script.write_text(cache_script)
+    cleanup = '''
+case "$1" in
+  remove|purge)
+    rm -f -- /etc/polkit-1/rules.d/49-xingxu-app-manager-*.rules
+    rm -rf -- /var/lib/miemie-app-manager/authorizations
+    rmdir /var/lib/miemie-app-manager 2>/dev/null || true
+    ;;
+esac
+''' if name == "postrm" else ""
+    script.write_text(cache_script.replace("exit 0\n", cleanup + "exit 0\n"))
     script.chmod(0o755)
+for path in stage.rglob("*"):
+    path.chmod(0o755 if path.is_dir() or path.stat().st_mode & 0o111 else 0o644)
 size = sum(p.stat().st_size for p in stage.rglob("*") if p.is_file()) // 1024 + 1
 (control_dir / "control").write_text(f'''Package: miemie-app-manager
 Version: {__version__}
@@ -62,12 +88,12 @@ Section: admin
 Priority: optional
 Architecture: all
 Maintainer: haotian <271516878+wanghao9103@users.noreply.github.com>
-Depends: python3 (>= 3.10), python3-gi, gir1.2-gtk-3.0, librsvg2-common, apt, dpkg, pkexec, hicolor-icon-theme, gtk-update-icon-cache, desktop-file-utils
+Depends: python3 (>= 3.10), python3-apt, python3-gi, gir1.2-gtk-3.0, librsvg2-common, apt, dpkg, pkexec, polkitd, hicolor-icon-theme, gtk-update-icon-cache, desktop-file-utils
 Recommends: adwaita-icon-theme
 Installed-Size: {size}
 Description: Native Ubuntu desktop application manager
  Lists installed desktop applications with icons, package versions and
- installation records. Supports name search and reviewed package removal
+ installation records. Supports name search, update checks and reviewed upgrades/removal
  through APT, Snap and Flatpak.
 ''')
 artifact = project / f"deliverables/miemie-app-manager_{__version__}_all.deb"

@@ -25,12 +25,12 @@ desktop = desktop_dir / "io.miemie.AppManager.desktop"
 desktop.write_text(f'''[Desktop Entry]
 Type=Application
 Name=星序应用管理
-Comment=查看、搜索和卸载 Ubuntu 应用
+Comment=查看、搜索、更新和卸载 Ubuntu 应用
 Exec="{escaped}"
 Icon={target / 'assets/icon.png'}
 Terminal=false
 Categories=Settings;PackageManager;
-Keywords=星序;应用;管理;卸载;Xingxu;uninstall;
+Keywords=星序;应用;管理;更新;卸载;Xingxu;update;uninstall;
 StartupNotify=true
 StartupWMClass=io.miemie.AppManager
 ''')

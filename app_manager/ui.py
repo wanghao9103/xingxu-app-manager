@@ -4,11 +4,16 @@ import json
 import os
 from pathlib import Path
 import threading
+import time
 from datetime import datetime, timedelta
 import gi
 gi.require_version("Gtk", "3.0")
 from gi.repository import Gtk, Gio, GLib, Gdk, GdkPixbuf
-from .backend import Manager, ManagerError, format_size
+from .backend import Manager, ManagerError, format_size, bare_package, run as run_command
+from .privileges import authorization_enabled, set_authorization
+from .updates import UpdateInfo, update_status
+from .errors import friendly_error, diagnostic_text
+from .progress import Progress
 from . import __version__
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -86,6 +91,9 @@ menuitem:hover label, menuitem:selected label { color: #8eeaf2; }
 entry { color: #e3efff; caret-color: #69deec; }
 headerbar { color: #eaf5ff; background: #101828; }
 .sidebar { background: #101828; }
+.update-progress { background: #142a37; border: 1px solid #246074; border-radius: 10px; padding: 14px 16px; }
+progressbar trough { background: #24384b; border: none; border-radius: 5px; min-height: 9px; }
+progressbar progress { background: #53cddd; border: none; border-radius: 5px; min-height: 9px; }
 """
 
 
@@ -146,14 +154,17 @@ def removes_running_manager(plan):
 class Window(Gtk.ApplicationWindow):
     def __init__(self, application, manager=None):
         super().__init__(application=application, title="星序 · 应用管理")
-        self.set_default_size(1220, 790)
-        self.set_size_request(1040, 620)
+        self.set_default_size(1320, 790)
+        self.set_size_request(1180, 620)
         self.set_icon_from_file(str(ROOT / "assets/icon.svg"))
         self.manager = manager or Manager()
         self.apps = []
         self.mode = "all"
         self.busy = False
         self.scanning = False
+        self._progress_timer = None
+        self._progress_generation = 0
+        self._pending_progress = None
         self.nav_buttons = {}
         self.history_path = Path(os.environ.get("XDG_STATE_HOME", str(Path.home() / ".local/state"))) / "miemie-app-manager/history.json"
         self.connect("delete-event", self.on_close)
@@ -183,6 +194,7 @@ class Window(Gtk.ApplicationWindow):
         caption.set_margin_bottom(12)
         sidebar.pack_start(caption, False, False, 0)
         self.add_nav(sidebar, "all", "全部应用", "view-grid-symbolic")
+        self.add_nav(sidebar, "updates", "可更新应用", "software-update-available-symbolic")
         self.add_nav(sidebar, "recent", "最近安装", "document-open-recent-symbolic")
         self.add_nav(sidebar, "large", "大型应用", "drive-harddisk-symbolic")
         caption = label("按安装来源", "section")
@@ -193,7 +205,12 @@ class Window(Gtk.ApplicationWindow):
         for mode, title, image in (("APT", "APT / Debian", "package-x-generic-symbolic"), ("Snap", "Snap 应用", "application-x-addon-symbolic"), ("Flatpak", "Flatpak 应用", "folder-symbolic"), ("手动安装", "手动安装", "folder-download-symbolic")):
             self.add_nav(sidebar, mode, title, image)
         sidebar.pack_start(box(), True, True, 0)
-        self.add_nav(sidebar, "history", "卸载记录", "document-text-symbolic")
+        self.authorize_button = style(Gtk.Button(label="授权设置"), "nav")
+        self.authorize_button.set_margin_start(13)
+        self.authorize_button.set_margin_end(13)
+        self.authorize_button.connect("clicked", self.configure_authorization)
+        sidebar.pack_start(self.authorize_button, False, False, 0)
+        self.add_nav(sidebar, "history", "操作记录", "document-text-symbolic")
         about = Gtk.Button(label=f"关于 · 版本 {__version__}")
         style(about, "nav")
         about.connect("clicked", self.about)
@@ -205,6 +222,7 @@ class Window(Gtk.ApplicationWindow):
         titles = box(True, 6)
         self.heading = label("全部应用", "title")
         self.subtitle = label("查看安装信息，快速搜索，一处管理所有应用。", "muted")
+        self.subtitle.set_ellipsize(3)
         titles.pack_start(self.heading, False, False, 0)
         titles.pack_start(self.subtitle, False, False, 0)
         heading.pack_start(titles, True, True, 0)
@@ -216,6 +234,11 @@ class Window(Gtk.ApplicationWindow):
         self.refresh_button.set_valign(Gtk.Align.CENTER)
         self.refresh_button.connect("clicked", lambda _: self.scan())
         heading.pack_start(self.refresh_button, False, False, 0)
+        self.check_button = style(Gtk.Button(label="检查更新"), "primary")
+        self.check_button.set_valign(Gtk.Align.CENTER)
+        self.check_button.set_tooltip_text("刷新 APT 软件源索引（需要系统授权），并检查 Snap / Flatpak 更新；不会升级应用。")
+        self.check_button.connect("clicked", lambda _: self.check_updates())
+        heading.pack_start(self.check_button, False, False, 0)
         main.pack_start(heading, False, False, 0)
 
         metrics = box(spacing=14)
@@ -249,15 +272,48 @@ class Window(Gtk.ApplicationWindow):
         main.pack_start(toolbar, False, False, 0)
         self.status = style(label("正在读取本机已安装应用…"), "status")
         self.status.set_line_wrap(True)
+        self.status.set_max_width_chars(100)
         self.status.set_no_show_all(True)
-        main.pack_start(self.status, False, False, 0)
+        self.status_area = box(spacing=10)
+        self.status_area.set_no_show_all(True)
+        self.status_area.pack_start(self.status, True, True, 0)
+        self.status_details = ""
+        self.status_details_button = Gtk.Button(label="查看详情")
+        self.status_details_button.set_halign(Gtk.Align.START)
+        self.status_details_button.set_no_show_all(True)
+        self.status_details_button.connect("clicked", lambda _: self.show_error_details())
+        self.status_details_button.set_valign(Gtk.Align.CENTER)
+        self.status_area.pack_start(self.status_details_button, False, False, 0)
+        main.pack_start(self.status_area, False, False, 0)
+
+        self.progress_area = style(box(True, 9), "update-progress")
+        self.progress_area.set_no_show_all(True)
+        progress_heading = box(spacing=14)
+        self.progress_title = label("", "app-name")
+        self.progress_title.set_ellipsize(3)
+        progress_heading.pack_start(self.progress_title, True, True, 0)
+        self.progress_elapsed = label("", "muted")
+        progress_heading.pack_start(self.progress_elapsed, False, False, 0)
+        self.progress_area.pack_start(progress_heading, False, False, 0)
+        progress_caption = box(spacing=14)
+        self.progress_stage = label("")
+        self.progress_stage.set_ellipsize(3)
+        progress_caption.pack_start(self.progress_stage, True, True, 0)
+        self.progress_percent = label("", "muted")
+        progress_caption.pack_start(self.progress_percent, False, False, 0)
+        self.progress_area.pack_start(progress_caption, False, False, 0)
+        self.progress_bar = Gtk.ProgressBar()
+        self.progress_bar.set_pulse_step(.06)
+        self.progress_bar.get_accessible().set_name("当前更新阶段的进度")
+        self.progress_area.pack_start(self.progress_bar, False, False, 0)
+        main.pack_start(self.progress_area, False, False, 0)
 
         table = style(box(True), "table")
         self.table_header = style(box(spacing=12), "table-header")
         self.table_buttons = {}
         self.table_arrows = {}
         self.sort_columns = {"应用名称": (0, 3, 0), "版本": (8, 7, 7), "占用空间": (4, 1, 1), "安装时间": (5, 2, 2)}
-        for title, width, expand in (("应用名称", 180, True), ("版本", 125, False), ("占用空间", 95, False), ("安装时间", 115, False), ("操作", 113, False)):
+        for title, width, expand in (("应用名称", 180, True), ("版本", 150, False), ("占用空间", 95, False), ("安装时间", 115, False), ("操作", 190, False)):
             if title in self.sort_columns:
                 cell = style(Gtk.Button(), "column-sort")
                 caption = box(spacing=6)
@@ -286,6 +342,7 @@ class Window(Gtk.ApplicationWindow):
         main.pack_start(self.footer, False, False, 0)
         self.show_all()
         self.status.show()
+        self.status_area.show()
         self.scan()
 
     def add_nav(self, sidebar, mode, title, image):
@@ -336,15 +393,141 @@ class Window(Gtk.ApplicationWindow):
 
     def on_close(self, *_):
         if self.busy:
-            self.show_status("正在卸载，请等待系统操作完成后再关闭窗口。", True)
+            self.show_status("正在处理软件管理操作，请等待完成后再关闭窗口。", True)
             return True
         return False
 
-    def show_status(self, text, error=False):
-        self.status.set_text(text)
+    def show_status(self, text, error=False, details=""):
+        readable = friendly_error(text) if error else text
+        self.status_details = diagnostic_text(details or (text if readable != text else ""))
+        self.status_details_button.set_visible(bool(self.status_details))
+        self.status.set_text(readable)
         context = self.status.get_style_context()
         (context.add_class if error else context.remove_class)("error")
         self.status.show()
+        self.status_area.show()
+
+    def hide_status(self):
+        self.status.hide()
+        self.status_area.hide()
+        self.status_details_button.hide()
+        self.status_details = ""
+
+    def start_progress(self, name):
+        self.end_progress(False)
+        self._progress_started = time.monotonic()
+        self._pending_progress = (self._progress_generation, Progress("正在复核更新版本与影响范围"))
+        self.progress_title.set_text(f"正在更新 {name}")
+        self.progress_bar.set_fraction(0)
+        for child in self.progress_area.get_children():
+            child.show_all()
+        self.progress_area.show()
+        self.progress_tick()
+        self._progress_timer = GLib.timeout_add(200, self.progress_tick)
+        return self._progress_generation
+
+    def queue_progress(self, generation, event):
+        # Worker threads only replace this tuple. GTK is updated by the UI timer,
+        # so verbose package output cannot flood the GTK main loop.
+        self._pending_progress = (generation, event)
+
+    def progress_tick(self):
+        pending = self._pending_progress
+        if pending and pending[0] == self._progress_generation:
+            event = pending[1]
+            self.progress_stage.set_text(event.stage)
+            if event.fraction is None:
+                self.progress_percent.set_text("进行中")
+                self.progress_bar.pulse()
+            else:
+                # APT can complete a phase before final version verification.
+                fraction = max(0, min(1, event.fraction))
+                self.progress_bar.set_fraction(fraction)
+                self.progress_percent.set_text(f"{fraction:.0%}")
+        elapsed = int(time.monotonic() - self._progress_started)
+        self.progress_elapsed.set_text(f"已用时 {elapsed // 60:02d}:{elapsed % 60:02d}")
+        return True
+
+    def end_progress(self, success):
+        if self._progress_timer is not None:
+            GLib.source_remove(self._progress_timer)
+            self._progress_timer = None
+        self._progress_generation += 1
+        self._pending_progress = None
+        if success:
+            self.progress_title.set_text("更新完成")
+            self.progress_stage.set_text("目标版本已确认，可以继续更新其他应用")
+            self.progress_percent.set_text("100%")
+            self.progress_bar.set_fraction(1)
+        else:
+            self.progress_area.hide()
+
+    def make_error_details_dialog(self, details):
+        dialog = Gtk.Dialog(title="操作详情", transient_for=self, modal=True)
+        dialog.set_default_size(660, 380)
+        dialog.add_button("关闭", Gtk.ResponseType.CLOSE)
+        scroll = Gtk.ScrolledWindow()
+        scroll.set_policy(Gtk.PolicyType.AUTOMATIC, Gtk.PolicyType.AUTOMATIC)
+        scroll.set_min_content_height(250)
+        text = label(diagnostic_text(details), "muted")
+        text.set_selectable(True)
+        text.set_line_wrap(True)
+        text.set_max_width_chars(80)
+        scroll.add(margins(text, 20))
+        dialog.get_content_area().add(scroll)
+        dialog.show_all()
+        return dialog
+
+    def show_error_details(self):
+        if not self.status_details:
+            return
+        dialog = self.make_error_details_dialog(self.status_details)
+        dialog.run()
+        dialog.destroy()
+
+    def make_authorization_dialog(self):
+        enabled = authorization_enabled()
+        dialog = Gtk.Dialog(title="星序授权设置", transient_for=self, modal=True)
+        dialog.set_default_size(530, 300)
+        dialog.authorization_target = not enabled
+        dialog.add_button("取消", Gtk.ResponseType.CANCEL)
+        action = dialog.add_button("撤销授权" if enabled else "授权一次，以后免密", Gtk.ResponseType.OK)
+        style(action, "danger" if enabled else "primary")
+        body = margins(box(True, 16), 24)
+        body.pack_start(label("已启用长期授权" if enabled else "一次授权，后续无需重复输入密码", "detail-title"), False, False, 0)
+        message = label("仅对这台电脑的当前账号生效。授权后，在星序中检查更新、更新和卸载应用无需再次输入系统密码；关闭重开星序后仍然生效。", "note")
+        message.set_line_wrap(True)
+        message.set_max_width_chars(48)
+        body.pack_start(message, False, False, 0)
+        note = label("更新和卸载前仍会显示确认窗口。你可以随时在这里撤销授权，卸载星序也会清理这项授权。", "muted")
+        note.set_line_wrap(True)
+        note.set_max_width_chars(48)
+        body.pack_start(note, False, False, 0)
+        dialog.get_content_area().add(body)
+        dialog.show_all()
+        return dialog
+
+    def configure_authorization(self, _=None):
+        if self.busy or self.scanning:
+            return
+        dialog = self.make_authorization_dialog()
+        response = dialog.run()
+        enabled = dialog.authorization_target
+        dialog.destroy()
+        if response != Gtk.ResponseType.OK:
+            return
+        self.busy = True
+        self.render()
+        self.show_status("请完成这一次系统身份验证，以保存星序授权设置…")
+        def done(_):
+            self.busy = False
+            self.render()
+            self.show_status("一次授权已启用，之后在星序内管理应用无需重复输入系统密码。" if enabled else "长期授权已撤销，后续操作将按系统策略验证身份。")
+        def failed(message):
+            self.busy = False
+            self.render()
+            self.show_status(message, True)
+        self.background(lambda: set_authorization(enabled, getattr(self.manager, "run", run_command)), done, failed)
 
     def background(self, task, success, failure=None):
         def worker():
@@ -364,6 +547,8 @@ class Window(Gtk.ApplicationWindow):
             return
         self.scanning = True
         self.refresh_button.set_sensitive(False)
+        self.check_button.set_sensitive(False)
+        self.render()
         self.show_status("正在读取本机应用与安装信息…")
         def done(apps):
             self.scanning = False
@@ -374,10 +559,11 @@ class Window(Gtk.ApplicationWindow):
             if self.manager.warnings:
                 self.show_status("；".join(self.manager.warnings), True)
             else:
-                self.status.hide()
+                self.hide_status()
         def failed(message):
             self.scanning = False
             self.refresh_button.set_sensitive(True)
+            self.render()
             self.show_status("读取失败：" + message, True)
         self.background(self.manager.scan, done, failed)
 
@@ -400,7 +586,9 @@ class Window(Gtk.ApplicationWindow):
     def filtered(self):
         query = self.search.get_text().strip().casefold()
         apps = [a for a in self.apps if query in (a.name + " " + a.package).casefold()]
-        if self.mode == "recent":
+        if self.mode == "updates":
+            apps = [a for a in apps if self.update_info(a).available]
+        elif self.mode == "recent":
             apps = [a for a in apps if self.recent(a)]
         elif self.mode == "large":
             apps = [a for a in apps if a.size >= 100 * 1024 * 1024]
@@ -411,11 +599,14 @@ class Window(Gtk.ApplicationWindow):
         return sort_apps(apps, order)
 
     def render(self):
+        self.refresh_button.set_sensitive(not self.busy and not self.scanning)
+        self.check_button.set_sensitive(not self.busy and not self.scanning)
+        self.authorize_button.set_sensitive(not self.busy and not self.scanning)
         self.update_sort_arrows()
         for mode, button in self.nav_buttons.items():
             context = button.get_style_context()
             (context.add_class if mode == self.mode else context.remove_class)("active")
-        title = {"all": "全部应用", "recent": "最近安装", "large": "大型应用", "history": "卸载记录"}.get(self.mode, f"{self.mode} 应用")
+        title = {"all": "全部应用", "updates": "可更新应用", "recent": "最近安装", "large": "大型应用", "history": "操作记录"}.get(self.mode, f"{self.mode} 应用")
         self.heading.set_text(title)
         for row in self.listbox.get_children():
             row.destroy()
@@ -428,9 +619,16 @@ class Window(Gtk.ApplicationWindow):
         for app in apps:
             self.listbox.add(self.app_row(app))
         if not apps:
-            self.empty("没有找到应用", "试试其他关键词，或切换安装来源。")
+            self.empty("暂无可更新应用" if self.mode == "updates" else "没有找到应用",
+                       "点击「检查更新」获取结果；检查失败或未适配的应用请在全部应用中查看。" if self.mode == "updates" else "试试其他关键词，或切换安装来源。")
         self.listbox.show_all()
-        self.footer.set_text(f"显示 {len(apps)} / {len(self.apps)} 个应用   ·   安装时间来自系统日志，缺失时显示未知")
+        available = sum(self.update_info(a).available for a in self.apps)
+        self.footer.set_text(f"显示 {len(apps)} / {len(self.apps)} 个应用   ·   {available} 个可更新   ·   刷新列表后需重新检查更新")
+
+    def update_info(self, app):
+        return getattr(self.manager, "updates", {}).get(app.id, UpdateInfo(
+            "unsupported" if app.source == "手动安装" else "unchecked",
+            note="请使用应用自身更新器或官方下载渠道。" if app.source == "手动安装" else "点击检查更新获取软件源中的可用版本。"))
 
     def app_row(self, app):
         row = Gtk.ListBoxRow()
@@ -459,7 +657,21 @@ class Window(Gtk.ApplicationWindow):
         titles.pack_start(meta, False, False, 0)
         title.pack_start(titles, True, True, 0)
         content.pack_start(title, True, True, 0)
-        for text, width, tip in ((app.version, 125, app.version), (format_size(app.size), 95, "APT 为软件包安装大小；Snap 为当前镜像大小；不包含个人数据与共享运行库。"), (app.installed_at[:10] or "未知", 115, app.date_note)):
+        info = self.update_info(app)
+        versions = box(True, 5)
+        versions.set_size_request(150, -1)
+        version = label(app.version, "muted")
+        version.set_ellipsize(3)
+        version.set_max_width_chars(18)
+        version.set_tooltip_text(app.version)
+        versions.pack_start(version, False, False, 0)
+        status = label("→ " + info.version if info.available else update_status(info), "app-meta")
+        status.set_ellipsize(3)
+        status.set_max_width_chars(18)
+        status.set_tooltip_text(f"{update_status(info)} {info.version}\n{info.note}")
+        versions.pack_start(status, False, False, 0)
+        content.pack_start(versions, False, False, 0)
+        for text, width, tip in ((format_size(app.size), 95, "APT 为软件包安装大小；Snap 为当前镜像大小；不包含个人数据与共享运行库。"), (app.installed_at[:10] or "未知", 115, app.date_note)):
             cell = label(text, "muted")
             cell.set_ellipsize(3)
             cell.set_max_width_chars(16)
@@ -467,17 +679,23 @@ class Window(Gtk.ApplicationWindow):
             cell.set_tooltip_text(tip)
             content.pack_start(cell, False, False, 0)
         actions = box(spacing=6)
-        actions.set_size_request(113, -1)
+        actions.set_size_request(190, -1)
         detail = Gtk.Button()
         detail.add(icon("dialog-information-symbolic", 16))
         detail.set_tooltip_text("应用详情")
         detail.connect("clicked", lambda _: self.details(app))
         actions.pack_start(detail, False, False, 0)
+        if info.available:
+            update = style(Gtk.Button(label="更新"), "primary")
+            update.set_sensitive(not self.busy and not self.scanning)
+            update.set_tooltip_text("查看更新影响并确认")
+            update.connect("clicked", lambda _: self.prepare_update(app))
+            actions.pack_start(update, False, False, 0)
         remove = style(Gtk.Button(label="卸载"), "danger")
         remove.set_sensitive(app.removable and not self.busy and not self.scanning)
         remove.set_tooltip_text("查看卸载影响并确认" if app.removable else "系统保护组件" if app.protected else "先查看卸载范围")
         remove.connect("clicked", lambda _: self.prepare_uninstall(app))
-        actions.pack_start(remove, False, False, 0)
+        actions.pack_end(remove, False, False, 0)
         content.pack_start(actions, False, False, 0)
         row.add(content)
         return row
@@ -507,6 +725,8 @@ class Window(Gtk.ApplicationWindow):
         body.pack_start(heading, False, False, 0)
         grid = Gtk.Grid(column_spacing=24, row_spacing=14)
         fields = [("软件包", app.package or "独立应用"), ("安装来源", app.source + (f" · {app.scope}" if app.scope else "")), ("版本", app.version), ("占用空间", format_size(app.size)), ("安装时间", app.installed_at or "未知"), ("时间依据", app.date_note), ("桌面入口", app.desktop_path or "无"), ("卸载状态", "系统保护组件" if app.protected else "支持自动卸载" if app.removable else "支持独立应用卸载")]
+        info = self.update_info(app)
+        fields.extend([("更新状态", update_status(info)), ("可更新版本", info.version or "—"), ("更新说明", info.note or "使用当前已配置的软件源。")])
         for i, (key, value) in enumerate(fields):
             grid.attach(label(key, "muted"), 0, i, 1, 1)
             text = label(value)
@@ -525,6 +745,110 @@ class Window(Gtk.ApplicationWindow):
         dialog.run()
         dialog.destroy()
 
+    def check_updates(self):
+        if self.busy or self.scanning:
+            return
+        self.busy = True
+        self.end_progress(False)
+        self.render()
+        self.show_status("正在检查更新；首次刷新软件源需系统授权，短时间内可复用，不会升级应用…")
+        def done(updates):
+            self.busy = False
+            self.render()
+            count = sum(info.available for info in updates.values())
+            failures = [info.note for info in updates.values() if info.state == "failed"]
+            message = f"检查完成：{count} 个应用可更新。"
+            if failures:
+                message += f" 部分软件源暂未完成检查，影响 {len(failures)} 个应用；请稍后重试。"
+            details = "\n\n".join(dict.fromkeys(info.details or info.note for info in updates.values() if info.state == "failed"))
+            self.show_status(message, bool(failures), details=details)
+        def failed(message):
+            self.busy = False
+            self.render()
+            self.show_status("检查更新失败：" + message, True)
+        self.background(self.manager.check_updates, done, failed)
+
+    def prepare_update(self, app):
+        if self.busy or self.scanning:
+            return
+        self.busy = True
+        self.render()
+        self.show_status(f"正在核对 {app.name} 的更新版本与影响…")
+        def ready(plan):
+            self.busy = False
+            self.render()
+            self.hide_status()
+            self.confirm_update(plan)
+        def failed(message):
+            self.busy = False
+            getattr(self.manager, "updates", {}).pop(app.id, None)
+            self.render()
+            self.show_status(message + " 请重新检查更新。", True)
+        self.background(lambda: self.manager.plan_update(app.id), ready, failed)
+
+    def make_update_dialog(self, plan):
+        dialog = Gtk.Dialog(title="确认更新", transient_for=self, modal=True)
+        dialog.set_default_size(580, 380)
+        dialog.add_button("取消", Gtk.ResponseType.CANCEL)
+        style(dialog.add_button("确认更新", Gtk.ResponseType.OK), "primary")
+        body = margins(box(True, 16), 24)
+        title = label(f"更新 {plan.app.name}？", "detail-title")
+        title.set_line_wrap(True)
+        title.set_max_width_chars(35)
+        body.pack_start(title, False, False, 0)
+        before = plan.info.installed if plan.app.source == "APT" else plan.app.version
+        versions = label(f"{plan.app.source} · {plan.app.scope or '系统'}\n{before} → {plan.info.version}")
+        versions.set_line_wrap(True)
+        versions.set_max_width_chars(60)
+        body.pack_start(versions, False, False, 0)
+        scroll = Gtk.ScrolledWindow()
+        scroll.set_min_content_height(90)
+        scroll.set_max_content_height(240)
+        scroll.set_propagate_natural_height(True)
+        changes = label("\n".join(plan.changes), "note")
+        changes.set_line_wrap(True)
+        changes.set_max_width_chars(65)
+        changes.set_selectable(True)
+        scroll.add(changes)
+        body.pack_start(scroll, True, True, 0)
+        note = label(plan.note, "muted")
+        note.set_line_wrap(True)
+        note.set_max_width_chars(60)
+        body.pack_start(note, False, False, 0)
+        if plan.app.source == "APT" and bare_package(plan.app.package) == "miemie-app-manager":
+            body.pack_start(label("星序更新成功后会退出，请重新打开以加载新版本。", "muted"), False, False, 0)
+        dialog.get_content_area().add(body)
+        dialog.show_all()
+        return dialog
+
+    def confirm_update(self, plan):
+        if self.busy or self.scanning:
+            return
+        dialog = self.make_update_dialog(plan)
+        response = dialog.run()
+        dialog.destroy()
+        if response != Gtk.ResponseType.OK:
+            return
+        self.busy = True
+        self.render()
+        self.hide_status()
+        generation = self.start_progress(plan.app.name)
+        def done(_):
+            self.end_progress(True)
+            self.record(plan.app, "已更新", "更新")
+            self.busy = False
+            if plan.app.source == "APT" and bare_package(plan.app.package) == "miemie-app-manager":
+                self.get_application().quit()
+                return
+            self.scan()
+        def failed(message):
+            self.end_progress(False)
+            self.record(plan.app, "更新未完成", "更新")
+            self.busy = False
+            self.scan()
+            self.error_dialog("更新未完成", message)
+        self.background(lambda: self.manager.update(plan, progress=lambda event: self.queue_progress(generation, event)), done, failed)
+
     def prepare_uninstall(self, app):
         if self.busy or self.scanning:
             return
@@ -535,7 +859,7 @@ class Window(Gtk.ApplicationWindow):
         def ready(plan):
             self.busy = False
             self.refresh_button.set_sensitive(True)
-            self.status.hide()
+            self.hide_status()
             self.render()
             self.confirm_uninstall(plan)
         def failed(message):
@@ -628,16 +952,16 @@ class Window(Gtk.ApplicationWindow):
             self.error_dialog("卸载未完成", message)
         self.background(lambda: self.manager.uninstall(plan, accept_risk=risk_accepted), done, failed)
 
-    def record(self, app, status):
+    def record(self, app, status, operation="卸载"):
         try:
             history = self.read_history()
-            history.insert(0, {"name": app.name, "package": app.package, "source": app.source, "status": status, "time": datetime.now().isoformat(timespec="seconds")})
+            history.insert(0, {"name": app.name, "package": app.package, "source": app.source, "status": status, "operation": operation, "time": datetime.now().isoformat(timespec="seconds")})
             self.history_path.parent.mkdir(parents=True, exist_ok=True)
             tmp = self.history_path.with_suffix(".tmp")
             tmp.write_text(json.dumps(history[:200], ensure_ascii=False, indent=2))
             tmp.replace(self.history_path)
         except OSError:
-            self.show_status("操作已结束，但卸载记录保存失败。", True)
+            self.show_status("操作已结束，但操作记录保存失败。", True)
 
     def read_history(self):
         try:
@@ -651,27 +975,34 @@ class Window(Gtk.ApplicationWindow):
         items = [h for h in self.read_history() if query in (h.get("name", "") + " " + h.get("package", "")).casefold()]
         for item in items:
             row = box(spacing=20)
-            row.pack_start(icon("edit-delete-symbolic", 22), False, False, 0)
+            operation = item.get("operation", "卸载")
+            row.pack_start(icon("software-update-available-symbolic" if operation == "更新" else "edit-delete-symbolic", 22), False, False, 0)
             text = box(True, 5)
             text.pack_start(label(item.get("name", ""), "app-name"), False, False, 0)
-            text.pack_start(label(item.get("package", "") + " · " + item.get("source", ""), "muted"), False, False, 0)
+            text.pack_start(label(operation + " · " + item.get("package", "") + " · " + item.get("source", ""), "muted"), False, False, 0)
             row.pack_start(text, True, True, 0)
             row.pack_start(label(item.get("time", "").replace("T", " "), "muted"), False, False, 0)
             row.pack_start(label(item.get("status", ""), "badge"), False, False, 0)
             self.listbox.add(row)
         if not items:
-            self.empty("还没有卸载记录", "通过本软件完成的卸载，会显示在这里。")
+            self.empty("还没有操作记录", "通过本软件发起的更新和卸载，会显示在这里。")
         self.listbox.show_all()
         self.footer.set_text("仅记录通过本软件发起的操作；最多保留最近 200 条。")
 
     def error_dialog(self, title, message):
         dialog = Gtk.MessageDialog(transient_for=self, modal=True, message_type=Gtk.MessageType.ERROR, buttons=Gtk.ButtonsType.CLOSE, text=title)
-        dialog.format_secondary_text(message[-1800:])
-        dialog.run()
+        readable = friendly_error(message)
+        dialog.format_secondary_text(readable)
+        if readable != message:
+            dialog.add_button("查看详情", 1001)
+        while dialog.run() == 1001:
+            details = self.make_error_details_dialog(message)
+            details.run()
+            details.destroy()
         dialog.destroy()
 
     def about(self, _):
-        dialog = Gtk.AboutDialog(transient_for=self, modal=True, program_name="星序 · 应用管理", version=__version__, comments="Ubuntu 原生应用管理工具\n应用图标 · 名称搜索 · 安装信息 · 卸载计划\n支持 APT、Snap 和 Flatpak；支持用户目录独立安装。", license_type=Gtk.License.MIT_X11)
+        dialog = Gtk.AboutDialog(transient_for=self, modal=True, program_name="星序 · 应用管理", version=__version__, comments="Ubuntu 原生应用管理工具\n安装信息 · 检查更新 · 更新与卸载计划\nAPT、Snap 和 Flatpak 支持更新；用户目录独立安装支持卸载。", license_type=Gtk.License.MIT_X11)
         dialog.set_logo(GdkPixbuf.Pixbuf.new_from_file_at_scale(str(ROOT / "assets/icon.svg"), 80, 80, True))
         dialog.run()
         dialog.destroy()
