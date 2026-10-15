@@ -133,6 +133,10 @@ def main():
             # Check the asynchronous UI entry point, status text, filtering and busy controls.
             win.check_button.clicked()
             assert win.busy and not win.check_button.get_sensitive() and not win.refresh_button.get_sensitive()
+            assert '正在刷新软件源并查询可用版本' in win.status.get_text()
+            assert not any(term in win.status.get_text() for term in ('短时间', '首次', '需系统授权'))
+            assert '需要系统授权' not in win.check_button.get_tooltip_text()
+            report['update_check_status_does_not_claim_temporary_or_required_authentication'] = True
             deadline = time.monotonic() + 5
             while win.busy and time.monotonic() < deadline:
                 settle(50)

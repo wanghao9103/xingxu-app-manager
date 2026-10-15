@@ -6,6 +6,7 @@ from pathlib import Path
 import threading
 import time
 from datetime import datetime, timedelta
+from functools import lru_cache
 import gi
 gi.require_version("Gtk", "3.0")
 from gi.repository import Gtk, Gio, GLib, Gdk, GdkPixbuf
@@ -128,6 +129,29 @@ def icon(name, size=20):
     return image
 
 
+@lru_cache(maxsize=24)
+def navigation_gicon(name, active=False):
+    color = "#59d9e8" if active else "#a0afc4"
+    svg = (ROOT / "assets/navigation" / f"{name}.svg").read_text().replace("currentColor", color)
+    return Gio.BytesIcon.new(GLib.Bytes.new(svg.encode()))
+
+
+def sidebar_button(title, image):
+    button = style(Gtk.Button(), "nav")
+    row = box(spacing=12)
+    button.navigation_icon_name = image
+    button.navigation_icon = Gtk.Image.new_from_gicon(navigation_gicon(image), Gtk.IconSize.BUTTON)
+    button.navigation_icon.set_pixel_size(18)
+    button.navigation_icon.set_valign(Gtk.Align.CENTER)
+    row.pack_start(button.navigation_icon, False, False, 0)
+    row.pack_start(label(title), False, False, 0)
+    button.add(row)
+    button.set_margin_start(13)
+    button.set_margin_end(13)
+    button.set_margin_bottom(4)
+    return button
+
+
 def app_icon(app, size=40):
     if app.id == APP_ID + ".desktop" or app.package.split(":", 1)[0] == "miemie-app-manager":
         return Gtk.Image.new_from_pixbuf(GdkPixbuf.Pixbuf.new_from_file_at_scale(str(ROOT / "assets/icon.png"), size, size, True))
@@ -205,9 +229,7 @@ class Window(Gtk.ApplicationWindow):
         for mode, title, image in (("APT", "APT / Debian", "package-x-generic-symbolic"), ("Snap", "Snap 应用", "application-x-addon-symbolic"), ("Flatpak", "Flatpak 应用", "folder-symbolic"), ("手动安装", "手动安装", "folder-download-symbolic")):
             self.add_nav(sidebar, mode, title, image)
         sidebar.pack_start(box(), True, True, 0)
-        self.authorize_button = style(Gtk.Button(label="授权设置"), "nav")
-        self.authorize_button.set_margin_start(13)
-        self.authorize_button.set_margin_end(13)
+        self.authorize_button = sidebar_button("授权设置", "changes-prevent-symbolic")
         self.authorize_button.connect("clicked", self.configure_authorization)
         sidebar.pack_start(self.authorize_button, False, False, 0)
         self.add_nav(sidebar, "history", "操作记录", "document-text-symbolic")
@@ -236,7 +258,7 @@ class Window(Gtk.ApplicationWindow):
         heading.pack_start(self.refresh_button, False, False, 0)
         self.check_button = style(Gtk.Button(label="检查更新"), "primary")
         self.check_button.set_valign(Gtk.Align.CENTER)
-        self.check_button.set_tooltip_text("刷新 APT 软件源索引（需要系统授权），并检查 Snap / Flatpak 更新；不会升级应用。")
+        self.check_button.set_tooltip_text("刷新软件源索引并检查 APT / Snap / Flatpak 可用版本；不会升级应用。可在「授权设置」启用一次长期授权。")
         self.check_button.connect("clicked", lambda _: self.check_updates())
         heading.pack_start(self.check_button, False, False, 0)
         main.pack_start(heading, False, False, 0)
@@ -346,14 +368,7 @@ class Window(Gtk.ApplicationWindow):
         self.scan()
 
     def add_nav(self, sidebar, mode, title, image):
-        button = style(Gtk.Button(), "nav")
-        row = box(spacing=12)
-        row.pack_start(icon(image, 18), False, False, 0)
-        row.pack_start(label(title), False, False, 0)
-        button.add(row)
-        button.set_margin_start(13)
-        button.set_margin_end(13)
-        button.set_margin_bottom(4)
+        button = sidebar_button(title, image)
         button.connect("clicked", lambda _: self.set_mode(mode))
         sidebar.pack_start(button, False, False, 0)
         self.nav_buttons[mode] = button
@@ -606,6 +621,7 @@ class Window(Gtk.ApplicationWindow):
         for mode, button in self.nav_buttons.items():
             context = button.get_style_context()
             (context.add_class if mode == self.mode else context.remove_class)("active")
+            button.navigation_icon.set_from_gicon(navigation_gicon(button.navigation_icon_name, mode == self.mode), Gtk.IconSize.BUTTON)
         title = {"all": "全部应用", "updates": "可更新应用", "recent": "最近安装", "large": "大型应用", "history": "操作记录"}.get(self.mode, f"{self.mode} 应用")
         self.heading.set_text(title)
         for row in self.listbox.get_children():
@@ -751,7 +767,7 @@ class Window(Gtk.ApplicationWindow):
         self.busy = True
         self.end_progress(False)
         self.render()
-        self.show_status("正在检查更新；首次刷新软件源需系统授权，短时间内可复用，不会升级应用…")
+        self.show_status("正在检查更新，正在刷新软件源并查询可用版本；不会升级应用…")
         def done(updates):
             self.busy = False
             self.render()
@@ -933,7 +949,7 @@ class Window(Gtk.ApplicationWindow):
         self.busy = True
         self.refresh_button.set_sensitive(False)
         self.render()
-        self.show_status(f"正在卸载 {plan.app.name}，请完成系统授权并等待…")
+        self.show_status(f"正在卸载 {plan.app.name}，请等待操作完成…")
         def done(_):
             self.record(plan.app, "已卸载")
             self.busy = False

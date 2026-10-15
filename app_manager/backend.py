@@ -377,7 +377,7 @@ class Manager:
                 if app.scope == "system":
                     args = ["/usr/bin/pkexec", *args]
             if progress:
-                progress("等待系统授权并卸载，请勿关闭窗口…")
+                progress("正在卸载，请勿关闭窗口…")
             output = self.run(args, timeout=1800)
             # An exit code alone is not proof of removal. Check the package manager.
             if app.source == "APT":

@@ -23,7 +23,7 @@ Native Ubuntu application manager built with Python and GTK 3.
 
 ## 下载与安装
 
-**当前源码版为 1.3.1，尚未发布对应的 GitHub Release 安装包。** 可运行源码，或用 `scripts/build-deb.py` 构建 `deliverables/miemie-app-manager_1.3.1_all.deb` 后安装。
+**当前源码版为 1.3.2，尚未发布对应的 GitHub Release 安装包。** 可运行源码，或用 `scripts/build-deb.py` 构建 `deliverables/miemie-app-manager_1.3.2_all.deb` 后安装。
 
 已有公开版本从 [GitHub Releases](https://github.com/wanghao9103/xingxu-app-manager/releases/latest) 下载 `miemie-app-manager_1.1.4_all.deb` 和 `SHA256SUMS`，在下载目录执行（1.1.4 不含应用更新功能）：
 
@@ -91,7 +91,7 @@ sudo apt install python3-apt python3-gi gir1.2-gtk-3.0 librsvg2-common pkexec
 
 ## 检查与执行更新
 
-1. 点击顶部「检查更新」。APT 首次会请求系统授权刷新索引，只下载软件源元数据，不升级应用；Snap、Flatpak 使用已配置的频道、分支和来源查询。
+1. 点击顶部「检查更新」。APT 刷新索引，只下载软件源元数据，不升级应用；未启用长期授权时，系统可能要求身份验证；Snap、Flatpak 使用已配置的频道、分支和来源查询。
 2. 列表显示可更新版本，可进入左侧「可更新应用」筛选。未检查、无更新、检查失败、锁定及独立安装的应用均不显示「更新」按钮；详情保留状态及原因。
 3. 点击某个应用的「更新」，查看版本与影响说明，确认后执行，界面实时显示下载、安装配置、最终核验等阶段和已用时间；百分比对应当前阶段，不代表全流程预计耗时。取消不会执行更新。结束后核对实际版本、修订号或构建提交，并刷新列表。操作记录同时兼容已有卸载记录。
 

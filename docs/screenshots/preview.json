@@ -2,6 +2,7 @@
   "synthetic_data_only": true,
   "uninstall_executed": false,
   "real_update_executed": false,
+  "update_check_status_does_not_claim_temporary_or_required_authentication": true,
   "update_buttons_only_exist_for_available_updates": true,
   "update_check_filter_search_and_busy_controls": true,
   "one_time_authorization_dialog_cancel_success_failure_and_revoke": true,

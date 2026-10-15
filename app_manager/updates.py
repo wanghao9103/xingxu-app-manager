@@ -272,7 +272,7 @@ def execute_update(manager, plan, progress=None):
         if current.fingerprint != plan.fingerprint or current.command != plan.command:
             raise ManagerError("更新版本或影响范围已变化，请重新检查并确认。")
         if progress:
-            progress(Progress("正在准备更新" if current.app.scope == "user" else "等待系统授权；已授权时将直接继续"))
+            progress(Progress("正在准备更新"))
         kwargs = {"progress": progress} if progress else {}
         output = manager.run(list(current.command), timeout=1800, **kwargs)
         if progress:
